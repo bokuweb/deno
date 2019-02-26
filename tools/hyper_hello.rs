@@ -1,40 +1,67 @@
 // Copyright 2018-2019 the Deno authors. All rights reserved. MIT license.
-// Adapted from https://github.com/hyperium/hyper/blob/master/examples/hello.rs
 
-#![deny(warnings)]
-extern crate hyper;
+use futures::{future, Future};
 
-use std::env;
-use hyper::{Body, Response, Server};
-use hyper::service::service_fn_ok;
-use hyper::rt::{self, Future};
+use hyper::service::service_fn;
+use hyper::{Body, Method, Request, Response, Server, StatusCode};
 
-static PHRASE: &'static [u8] = b"Hello World!";
+use std::io;
+use std::path::Path;
+
+static NOTFOUND: &[u8] = b"Not Found";
+static PORT: u16 = 4545;
 
 fn main() {
-  let mut port: u16 = 4544;
-  if let Some(custom_port) = env::args().nth(1) {
-    port = custom_port.parse::<u16>().unwrap();
-  }
+    let addr = ([127, 0, 0, 1], PORT).into();
+    let server = Server::bind(&addr)
+        .serve(|| service_fn(response_examples))
+        .map_err(|e| eprintln!("server error: {}", e));
 
-  let addr = ([127, 0, 0, 1], port).into();
+    println!("Listening on http://{}", addr);
+    hyper::rt::run(server);
+}
 
-  // new_service is run for each connection, creating a 'service'
-  // to handle requests for that specific connection.
-  let new_service = || {
-      // This is the `Service` that will handle the connection.
-      // `service_fn_ok` is a helper to convert a function that
-      // returns a Response into a `Service`.
-      service_fn_ok(|_| {
-          Response::new(Body::from(PHRASE))
-      })
-  };
+type ResponseFuture = Box<Future<Item = Response<Body>, Error = io::Error> + Send>;
 
-  let server = Server::bind(&addr)
-      .serve(new_service)
-      .map_err(|e| eprintln!("server error: {}", e));
+fn response_examples(req: Request<Body>) -> ResponseFuture {
+    match (req.method(), req.uri().path()) {
+        (&Method::GET, _) => {
+            let path = Path::new(req.uri().path());
+            response_file(
+                path.strip_prefix("/")
+                    .expect("strip path prefix")
+                    .to_str()
+                    .expect("to str"),
+            )
+        }
+        _ => Box::new(future::ok(
+            Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::empty())
+                .unwrap(),
+        )),
+    }
+}
 
-  println!("Listening on http://{}", addr);
-
-  rt::run(server);
+fn response_file(f: &str) -> ResponseFuture {
+    let filename = f.to_string(); // we need to copy for lifetime issues
+    Box::new(
+        tokio_fs::file::File::open(filename)
+            .and_then(|file| {
+                let buf: Vec<u8> = Vec::new();
+                tokio_io::io::read_to_end(file, buf)
+                    .and_then(|item| Ok(Response::new(item.1.into())))
+                    .or_else(|_| {
+                        Ok(Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .body(Body::empty())
+                            .unwrap())
+                    })
+            }).or_else(|_| {
+                Ok(Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .body(NOTFOUND.into())
+                    .unwrap())
+            }),
+    )
 }

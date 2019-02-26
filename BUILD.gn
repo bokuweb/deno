@@ -170,6 +170,11 @@ rust_executable("hyper_hello") {
   extern = [
     "$rust_build:hyper",
     "$rust_build:ring",
+    "$rust_build:tokio_fs",
+    "$rust_build:tokio_io",
+    "$rust_build:futures",
+    "$rust_build:mime",
+    "$rust_build:headers",
   ]
 }
 
